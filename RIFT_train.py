@@ -88,23 +88,22 @@ def train_RIFT_model(config, train_set, val_set, param_search_grid, random_seed=
 
 
 if __name__ == '__main__':
-    ts_df = pd.read_csv("data/ts_df/ts_df.csv", encoding='utf-8')
 
-    # train_set = RIFT_Dataset(ts_df, ('2010-01-01', '2016-12-31'), target_fns=target_fns, days_lag=DAYS_LAG, days_lead=DAYS_LEAD)
-    # val_set = RIFT_Dataset(ts_df, ('2017-01-01', '2021-12-31'), target_fns=target_fns, days_lag=DAYS_LAG, days_lead=DAYS_LEAD, sample_size=20)
-    # with open('data/train/train_set.dill', 'wb') as handle:
-    #     dill.dump(train_set, handle)        
-    # with open('data/train/val_set.dill', 'wb') as handle:
-    #     dill.dump(val_set, handle)
+    reload_datasets = True
+    if reload_datasets:
+        ts_df = pd.read_csv("data/ts_df/josh.csv", encoding='utf-8')
+        train_set = RIFT_Dataset(ts_df, ('2010-01-01', '2016-12-31'), target_fns=target_fns, days_lag=DAYS_LAG, days_lead=DAYS_LEAD, sample_size=20)
+        val_set = RIFT_Dataset(ts_df, ('2017-01-01', '2021-12-31'), target_fns=target_fns, days_lag=DAYS_LAG, days_lead=DAYS_LEAD, sample_size=20)
+        with open('data/train/train_set.dill', 'wb') as handle:
+            dill.dump(train_set, handle)
+        with open('data/train/val_set.dill', 'wb') as handle:
+            dill.dump(val_set, handle)
 
     with open('data/train/train_set.dill', 'rb') as handle:
         train_set = dill.load(handle)
     with open('data/train/val_set.dill', 'rb') as handle:
         val_set = dill.load(handle)
-    # with open('data/train/train_set_temp.dill', 'rb') as handle:
-    #     train_set = dill.load(handle)
-    # with open('data/train/val_set_temp.dill', 'rb') as handle:
-    #     val_set = dill.load(handle)
+
 
     config = RIFT_Model_Config(
         model_type="RIFT",

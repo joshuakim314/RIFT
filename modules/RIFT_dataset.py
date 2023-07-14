@@ -1,3 +1,5 @@
+import os
+
 import numpy as np
 import pandas as pd
 import pickle
@@ -39,14 +41,21 @@ class RIFT_Dataset(data.Dataset):
     
     def create_ts_dict(self):
         tickers = sorted(set(self.ts_df['ticker'].tolist()))
-        self.ts_dict = {ticker: np.full((len(self.trading_date_list), 2), np.nan) for ticker in tickers}
+        num_cols = self.ts_df.shape[1] - 3  # exclude ticker, date, rel_date_num
+        self.ts_dict = {ticker: np.full((len(self.trading_date_list), num_cols), np.nan) for ticker in tickers}
         for ticker in tickers:
             ticker_df = self.ts_df[self.ts_df['ticker'] == ticker].sort_values(by='date')
             rel_date_nums = ticker_df['rel_date_num'].tolist()
-            prices = ticker_df['price'].tolist()
-            log_rets = ticker_df['log_ret'].tolist()
-            self.ts_dict[ticker][rel_date_nums, 0] = prices
-            self.ts_dict[ticker][rel_date_nums, 1] = log_rets
+            i = 0
+            for c in ticker_df.columns:
+                if c not in ['ticker', 'date', 'rel_date_num']:
+                    data = ticker_df[c].tolist()
+                    self.ts_dict[ticker][rel_date_nums, i] = data
+                    i += 1
+            #prices = ticker_df['price'].tolist()
+            #log_rets = ticker_df['log_ret'].tolist()
+            #self.ts_dict[ticker][rel_date_nums, 0] = prices
+            #self.ts_dict[ticker][rel_date_nums, 1] = log_rets
     
     def create_pairs(self):
         self.pairs = []
@@ -123,8 +132,8 @@ if __name__ == '__main__':
     # with open('us_etf_tickers.pkl', 'wb') as handle:
     #     pickle.dump(etf_tickers, handle, protocol=pickle.HIGHEST_PROTOCOL)
 
-    with open('data/etf/us_etf_tickers.pkl', 'rb') as handle:
-        etf_tickers = pickle.load(handle)
+    #with open('data/etf/us_etf_tickers.pkl', 'rb') as handle:
+    #    etf_tickers = pickle.load(handle)
     
     target_fns = [
         lambda x1, x2: seq_corr_1d(x1, x2),
@@ -134,10 +143,32 @@ if __name__ == '__main__':
         lambda x1, x2: seq_corr_1d(x1[0:10], x2[0:10]),
         lambda x1, x2: seq_corr_1d(x1[0:5], x2[0:5])
     ]
-    
-    ts_df = pd.read_csv("data/ts_df/ts_df.csv", encoding='utf-8')
-    rd = RIFT_Dataset(ts_df, ('2018-01-01', '2018-01-08'),  target_fns=target_fns)
+
+    ts_df = pd.read_csv("../data/ts_df/josh.csv", encoding='utf-8')
+    econ_df = pd.read_csv("../data/ts_df/econ_data.csv", encoding='utf-8')
+    yield_df = pd.read_csv("../data/ts_df/yield_interpolated.csv", encoding='utf-8')
+    yield_df.columns = ['date'] + ['yield'+str(c) for c in yield_df.columns.tolist()[1:]]
+    ts_df = ts_df.merge(econ_df, on=['date'], how='left')
+    ts_df = ts_df.merge(yield_df, on=['date'], how='left')
+    ts_df['date'] = pd.to_datetime(ts_df['date']).dt.date
+    data_dts = [pd.to_datetime(d).date() for d in ('2010-01-01', '2021-12-01')]
+    ts_df = ts_df.loc[(ts_df['date'] >= data_dts[0]) & (ts_df['date'] <= data_dts[1])]
+
+    print("debug")
+
+    # data_dts = ('2016-01-01', '2018-01-08')
+    # data_dts = [pd.to_datetime(d).date() for d in data_dts]
+    # ts_df = pd.read_pickle("../data/ts_df/ts_df.pkl")
+    # ts_df = ts_df.query('@data_dts[0] <= tick_datetime <= @data_dts[1]')
+    # ts_df.rename(columns={'tick_datetime': 'date',
+    #                       'log_return': 'log_ret',
+    #                       'security_id': 'ticker',
+    #                       'closing_price_adj': 'price'
+    #                       }, inplace=True)
+    rd = RIFT_Dataset(ts_df, ('2018-01-01', '2018-01-08'),  target_fns=target_fns, sample_size=20)
     # for date in rd.trading_date_list[::250]:
     #     print(date, len(rd.get_available_tickers(date)))
+
+    print(rd[0])
     
     breakpoint()
