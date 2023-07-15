@@ -1,3 +1,4 @@
+import os
 import pickle
 import dill
 import itertools
@@ -88,21 +89,34 @@ def train_RIFT_model(config, train_set, val_set, param_search_grid, random_seed=
 
 
 if __name__ == '__main__':
+    cuda_available = torch.cuda.is_available()
+    print('CUDA available: ' + str(cuda_available))
+    print(os.curdir)
 
     reload_datasets = True
     if reload_datasets:
+
         ts_df = pd.read_csv("data/ts_df/josh.csv", encoding='utf-8')
-        train_set = RIFT_Dataset(ts_df, ('2010-01-01', '2016-12-31'), target_fns=target_fns, days_lag=DAYS_LAG, days_lead=DAYS_LEAD, sample_size=20)
-        val_set = RIFT_Dataset(ts_df, ('2017-01-01', '2021-12-31'), target_fns=target_fns, days_lag=DAYS_LAG, days_lead=DAYS_LEAD, sample_size=20)
+        econ_df = pd.read_csv("data/ts_df/econ_data.csv", encoding='utf-8')
+        yield_df = pd.read_csv("data/ts_df/yield_interpolated.csv", encoding='utf-8')
+        yield_df.columns = ['date'] + ['yield' + str(c) for c in yield_df.columns.tolist()[1:]]
+        ts_df = ts_df.merge(econ_df, on=['date'], how='left')
+        ts_df = ts_df.merge(yield_df, on=['date'], how='left')
+        ts_df['date'] = pd.to_datetime(ts_df['date']).dt.date
+        data_dts = [pd.to_datetime(d).date() for d in ('2010-01-01', '2021-12-01')]
+        ts_df = ts_df.loc[(ts_df['date'] >= data_dts[0]) & (ts_df['date'] <= data_dts[1])]
+
+        train_set = RIFT_Dataset(ts_df, ('2017-01-01', '2018-01-01'), target_fns=target_fns, days_lag=DAYS_LAG, days_lead=DAYS_LEAD, sample_size=20)
+        val_set = RIFT_Dataset(ts_df, ('2018-01-01', '2018-01-08'), target_fns=target_fns, days_lag=DAYS_LAG, days_lead=DAYS_LEAD, sample_size=20)
         with open('data/train/train_set.dill', 'wb') as handle:
             dill.dump(train_set, handle)
         with open('data/train/val_set.dill', 'wb') as handle:
             dill.dump(val_set, handle)
-
-    with open('data/train/train_set.dill', 'rb') as handle:
-        train_set = dill.load(handle)
-    with open('data/train/val_set.dill', 'rb') as handle:
-        val_set = dill.load(handle)
+    else:
+        with open('data/train/train_set.dill', 'rb') as handle:
+            train_set = dill.load(handle)
+        with open('data/train/val_set.dill', 'rb') as handle:
+            val_set = dill.load(handle)
 
 
     config = RIFT_Model_Config(
