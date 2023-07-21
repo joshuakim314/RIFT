@@ -84,7 +84,7 @@ class Model_Trainer():
                         print("Parallel devices being used: " + str(self.model.device_ids))
                 
                 model_output = self.model.forward(inputs)
-                if len(model_output.shape) == 3:
+                if len(model_output.shape) == 3: #TODO: Whats this
                     model_output = torch.squeeze(model_output[:, -1, :], 1)
 
                 # display info on the very first step

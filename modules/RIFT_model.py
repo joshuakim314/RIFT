@@ -119,16 +119,8 @@ class RIFT_Encoder(nn.Module):
         
         x = torch.cat((encoder_emb_0, encoder_emb_1), 1)  # concatenate the embeddings
         if self.config.take_embedding_conv:
-            x = torch.cat(
-                (
-                    x, 
-                    seq_corr_3d(
-                        full_encoder_embedding_0.transpose(0, 1), 
-                        full_encoder_embedding_1.transpose(0, 1)
-                    )
-                ), 
-                1
-            )
+            embed_corr = seq_corr_3d(full_encoder_embedding_0.transpose(0, 1), full_encoder_embedding_1.transpose(0, 1))
+            x = torch.cat((x, embed_corr), 1)
         # self.logger.debug(f"shape of x before adding the per security mlp_embs: {x.shape}")
         return x
     

@@ -1,6 +1,7 @@
 import os
 import pickle
 import dill
+import lzma
 import itertools
 import pandas as pd
 import numpy as np
@@ -31,18 +32,6 @@ def get_input_ts_transform_list():
 
 
 input_ts_transform_fns = get_input_ts_transform_list()
-target_fns = [
-    lambda x1, x2: seq_corr_1d(x1, x2),
-    lambda x1, x2: seq_corr_1d(x1[0:120], x2[0:120]),
-    lambda x1, x2: seq_corr_1d(x1[0:60], x2[0:60]),
-    lambda x1, x2: seq_corr_1d(x1[0:20], x2[0:20]),
-    lambda x1, x2: seq_corr_1d(x1[0:10], x2[0:10]),
-    lambda x1, x2: seq_corr_1d(x1[0:5], x2[0:5])
-]
-
-DAYS_LAG = 500
-DAYS_LEAD = 250
-
 
 def train_RIFT_model(config, train_set, val_set, param_search_grid, random_seed=2023):
     np.random.seed(random_seed)
@@ -89,42 +78,69 @@ def train_RIFT_model(config, train_set, val_set, param_search_grid, random_seed=
 
 
 if __name__ == '__main__':
+    DAYS_LAG = 252
+    DAYS_LEAD = 50
+    target_fns = [
+        lambda x1, x2: seq_corr_1d(x1[0:5], x2[0:5]),
+        lambda x1, x2: seq_corr_1d(x1[0:10], x2[0:10]),
+        lambda x1, x2: seq_corr_1d(x1[0:20], x2[0:20]),
+        lambda x1, x2: seq_corr_1d(x1[0:30], x2[0:30]),
+        lambda x1, x2: seq_corr_1d(x1[0:40], x2[0:40]),
+        lambda x1, x2: seq_corr_1d(x1, x2),
+    ]
+
     cuda_available = torch.cuda.is_available()
     print('CUDA available: ' + str(cuda_available))
     print(os.curdir)
 
-    reload_datasets = True
+    reload_datasets = False
     if reload_datasets:
 
-        ts_df = pd.read_csv("data/ts_df/josh.csv", encoding='utf-8')
+        ts_df = pd.read_csv("data/ts_df/all_etf_data.csv.gz", encoding='utf-8-sig', compression='gzip')
+        tickers = ts_df['ticker'].unique().tolist()[:100] #TODO: remove this line
+        ts_df = ts_df.query("ticker in @tickers")
         econ_df = pd.read_csv("data/ts_df/econ_data.csv", encoding='utf-8')
         yield_df = pd.read_csv("data/ts_df/yield_interpolated.csv", encoding='utf-8')
-        yield_df.columns = ['date'] + ['yield' + str(c) for c in yield_df.columns.tolist()[1:]]
+        yield_df.columns = ['date'] + ['yield'+str(c) for c in yield_df.columns.tolist()[1:]]
+
         ts_df = ts_df.merge(econ_df, on=['date'], how='left')
         ts_df = ts_df.merge(yield_df, on=['date'], how='left')
         ts_df['date'] = pd.to_datetime(ts_df['date']).dt.date
         data_dts = [pd.to_datetime(d).date() for d in ('2010-01-01', '2021-12-01')]
         ts_df = ts_df.loc[(ts_df['date'] >= data_dts[0]) & (ts_df['date'] <= data_dts[1])]
 
-        train_set = RIFT_Dataset(ts_df, ('2017-01-01', '2018-01-01'), target_fns=target_fns, days_lag=DAYS_LAG, days_lead=DAYS_LEAD, sample_size=20)
-        val_set = RIFT_Dataset(ts_df, ('2018-01-01', '2018-01-08'), target_fns=target_fns, days_lag=DAYS_LAG, days_lead=DAYS_LEAD, sample_size=20)
-        with open('data/train/train_set.dill', 'wb') as handle:
+        train_set = RIFT_Dataset(ts_df, ('2016-01-01', '2016-12-31'),
+                                 target_fns=target_fns, days_lag=DAYS_LAG, days_lead=DAYS_LEAD, sample_size='ALL')
+        val_set = RIFT_Dataset(ts_df, ('2017-01-01', '2017-02-01'),
+                               target_fns=target_fns, days_lag=DAYS_LAG, days_lead=DAYS_LEAD, sample_size='ALL')
+        # with open('data/train/train_set.dill', 'wb') as handle:
+        #     dill.dump(train_set, handle)
+        # with open('data/train/val_set.dill', 'wb') as handle:
+        #     dill.dump(val_set, handle)
+
+        with lzma.open('data/train/train_set.dill.xz', 'wb') as handle:
             dill.dump(train_set, handle)
-        with open('data/train/val_set.dill', 'wb') as handle:
+        with lzma.open('data/train/val_set.dill.xz', 'wb') as handle:
             dill.dump(val_set, handle)
     else:
-        with open('data/train/train_set.dill', 'rb') as handle:
+        with lzma.open('data/train/train_set.dill.xz', 'rb') as handle:
             train_set = dill.load(handle)
-        with open('data/train/val_set.dill', 'rb') as handle:
+        with lzma.open('data/train/val_set.dill.xz', 'rb') as handle:
             val_set = dill.load(handle)
+        # with open('data/train/train_set.dill', 'rb') as handle:
+        #     train_set = dill.load(handle)
+        # with open('data/train/val_set.dill', 'rb') as handle:
+        #     val_set = dill.load(handle)
+
+    #print(train_set[0])
 
 
     config = RIFT_Model_Config(
         model_type="RIFT",
-        input_size=2,
+        input_size=24,
         sequence_length=DAYS_LAG,
         n_targets=len(target_fns),
-        input_ts_transform_list=input_ts_transform_fns,
+        input_ts_transform_list=[], #input_ts_transform_fns,
         tcn_num_channels=[450, 450, 450],
         tcn_kernel_size=3,
         tcn_dropout=0.1,
@@ -151,8 +167,8 @@ if __name__ == '__main__':
     )
 
     param_search_grid = {
-        'tcn_num_channels': [[600, 600, 600]],  # [450, 450, 450]
-        'post_encoder_fc_layers': [[512, 256]]
+        #'tcn_num_channels': [[600, 600, 600]],  # [450, 450, 450]
+        #'post_encoder_fc_layers': [[512, 256]]
     }
     model_trainers, res_dfs = train_RIFT_model(config, train_set, val_set, param_search_grid)
     breakpoint()
