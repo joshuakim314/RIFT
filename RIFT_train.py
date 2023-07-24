@@ -70,7 +70,6 @@ def train_RIFT_model(config, train_set, val_set, param_search_grid, random_seed=
             torch.cuda.empty_cache()
         model_trainer.train()
         res_df = model_trainer.score_model(score_loader)
-        
         model_trainers.append(model_trainer)
         res_dfs.append(res_df)
 
@@ -93,11 +92,11 @@ if __name__ == '__main__':
     print('CUDA available: ' + str(cuda_available))
     print(os.curdir)
 
-    reload_datasets = False
+    reload_datasets = True
     if reload_datasets:
 
         ts_df = pd.read_csv("data/ts_df/all_etf_data.csv.gz", encoding='utf-8-sig', compression='gzip')
-        tickers = ts_df['ticker'].unique().tolist()[:100] #TODO: remove this line
+        tickers = ts_df['ticker'].unique().tolist()[:5] #TODO: remove this line
         ts_df = ts_df.query("ticker in @tickers")
         econ_df = pd.read_csv("data/ts_df/econ_data.csv", encoding='utf-8')
         yield_df = pd.read_csv("data/ts_df/yield_interpolated.csv", encoding='utf-8')

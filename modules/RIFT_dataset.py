@@ -14,9 +14,39 @@ from itertools import combinations
 
 
 class RIFT_Dataset(data.Dataset):
-    def __init__(self, ts_df, date_range, target_fns, days_lag=500, days_lead=250, sample_size=200, random_seed=2023):
+    def __init__(self, ts_df, date_range, target_fns, days_lag=500, days_lead=250, sample_size=200, random_seed=2023,
+                 norm_inputs=True):
         super().__init__()
         self.ts_df = ts_df # columns: ["ticker", "date", "price", "log_ret"]
+        if norm_inputs:
+            yield_cols = []
+            px_cols = []
+            other_cols = []
+            for c in ts_df.columns:
+                if c in ['ticker', 'date', 'rel_date', 'rel_date_num']:
+                    continue
+                elif c[:5] == 'yield':
+                    yield_cols.append(c)
+                elif c in ['price', 'log_ret']:
+                    px_cols.append(c)
+                else:
+                    other_cols.append(c)
+
+            yield_mean = (ts_df[yield_cols].values).mean()
+            yield_std = (ts_df[yield_cols].values).std()
+            ts_df[yield_cols] = (ts_df[yield_cols] - yield_mean) / yield_std
+            for c in px_cols:
+                #group by ticker
+                px_mean = ts_df.groupby('ticker')[c].transform('mean')
+                px_std = ts_df.groupby('ticker')[c].transform('std')
+                ts_df[c] = (ts_df[c] - px_mean) / px_std
+            for c in other_cols:
+                #No need to group
+                px_mean = ts_df[c].mean()
+                px_std = ts_df[c].std()
+                ts_df[c] = (ts_df[c] - px_mean) / px_std
+
+
         self.start_date, self.end_date = date_range
         self.target_fns = target_fns
         self.days_lag = days_lag
@@ -62,12 +92,12 @@ class RIFT_Dataset(data.Dataset):
         self.pairs = []
         for date in [date for date in self.trading_date_list if pd.to_datetime(self.start_date) <= date <= pd.to_datetime(self.end_date)]:
             tickers = self.get_available_tickers(date)
+            np.random.shuffle(tickers)
             print(f"{date}: {len(tickers)} tickers available")
             if self.sample_size == "ALL":
                 for t, s in combinations(tickers, 2):
                     self.pairs.append((date, self.rel_date_num_dict[date], t, s))
             else:
-                np.random.shuffle(tickers)
                 ticker_num = self.sample_size // 2
                 if isinstance(self.sample_size, float):
                     ticker_num = int(len(tickers) * self.sample_size) // 2
@@ -119,10 +149,12 @@ class RIFT_Dataset(data.Dataset):
         #    return (self.transform(ts_lag_t), self.transform(ts_lag_s)), [date.strftime('%Y-%m-%d'), rel_date_num, t, s]
 
         historical_corr = seq_corr_1d(self.transform(ts_lag_t[:, corr_col]), self.transform(ts_lag_s[:, corr_col])).item()
-        target = np.zeros((len(self.target_fns)))
+        target = np.zeros((len(self.target_fns)) + 1)
         for i, target_fn in enumerate(self.target_fns):
             target[i] = target_fn(self.transform(ts_lead_t[:, corr_col]), self.transform(ts_lead_s[:, corr_col])).item()
         target = target - historical_corr # target as residual correlation by subtracting historical correlation
+        #historical_corr is last element of target
+        target[-1] = historical_corr
         
         return (self.transform(ts_lag_t), self.transform(ts_lag_s)), self.transform(target)
         

@@ -67,6 +67,7 @@ class Model_Trainer():
 
     def train(self):
         for epoch in range(0, self.max_epochs):
+            print(f"Epoch {epoch}")
             self.running_loss = 0.0
             self.recent_loss = 0.0
             self.epoch_steps = 0
