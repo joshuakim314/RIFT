@@ -1,5 +1,9 @@
+import math
 import os
 import pickle
+import sys
+import math
+
 import dill
 import lzma
 import itertools
@@ -70,77 +74,55 @@ def train_RIFT_model(config, train_set, val_set, param_search_grid, random_seed=
             torch.cuda.empty_cache()
         model_trainer.train()
         res_df = model_trainer.score_model(score_loader)
+        
         model_trainers.append(model_trainer)
         res_dfs.append(res_df)
 
     return model_trainer, res_df
 
+def retrieve_annual_datasets(y_s, y_e):
+    datasets = {}
+    for y in [str(y) for y in range(y_s, y_e+1)]:
+        with lzma.open('data/train/train_set_' + y + '.dill.xz', 'rb') as handle:
+            datasets[y] = dill.load(handle)
+    return datasets
+
 
 if __name__ == '__main__':
-    DAYS_LAG = 252
-    DAYS_LEAD = 50
-    target_fns = [
-        lambda x1, x2: seq_corr_1d(x1[0:5], x2[0:5]),
-        lambda x1, x2: seq_corr_1d(x1[0:10], x2[0:10]),
-        lambda x1, x2: seq_corr_1d(x1[0:20], x2[0:20]),
-        lambda x1, x2: seq_corr_1d(x1[0:30], x2[0:30]),
-        lambda x1, x2: seq_corr_1d(x1[0:40], x2[0:40]),
-        lambda x1, x2: seq_corr_1d(x1, x2),
-    ]
 
     cuda_available = torch.cuda.is_available()
+    if cuda_available:
+        torch.cuda.empty_cache()
     print('CUDA available: ' + str(cuda_available))
     print(os.curdir)
 
-    reload_datasets = True
-    if reload_datasets:
+    datasets = retrieve_annual_datasets(2012, 2012)
+    dataset = datasets['2012']
+    dataset_length = len(dataset)
 
-        ts_df = pd.read_csv("data/ts_df/all_etf_data.csv.gz", encoding='utf-8-sig', compression='gzip')
-        tickers = ts_df['ticker'].unique().tolist()[:5] #TODO: remove this line
-        ts_df = ts_df.query("ticker in @tickers")
-        econ_df = pd.read_csv("data/ts_df/econ_data.csv", encoding='utf-8')
-        yield_df = pd.read_csv("data/ts_df/yield_interpolated.csv", encoding='utf-8')
-        yield_df.columns = ['date'] + ['yield'+str(c) for c in yield_df.columns.tolist()[1:]]
+    #train with frst 50%, validate with last 10% of year
+    train_indices = list(range(0, int(0.5 * dataset_length)))
+    val_indices = list(range(int(0.8 * dataset_length), int(0.9 * dataset_length)))
 
-        ts_df = ts_df.merge(econ_df, on=['date'], how='left')
-        ts_df = ts_df.merge(yield_df, on=['date'], how='left')
-        ts_df['date'] = pd.to_datetime(ts_df['date']).dt.date
-        data_dts = [pd.to_datetime(d).date() for d in ('2010-01-01', '2021-12-01')]
-        ts_df = ts_df.loc[(ts_df['date'] >= data_dts[0]) & (ts_df['date'] <= data_dts[1])]
+    #split the 2010 data into train/val (no shuffle), then sample 0.5% of each
+    train_set, val_set = data.Subset(dataset, train_indices), data.Subset(dataset, val_indices)
+    #train_size = math.floor(0.01 * len(train_set))
+    #val_size = math.floor(0.00002 * len(val_set))
+    #train_set, _ = data.random_split(train_set, [train_size, len(train_set)-train_size])
+    #val_set, _ = data.random_split(val_set, [val_size, len(val_set)-val_size])
+    print(f"dataset size: {dataset_length}")
+    print(f"train_set size: {len(train_set)}")
+    print(f"val_set size: {len(val_set)}")
 
-        train_set = RIFT_Dataset(ts_df, ('2016-01-01', '2016-12-31'),
-                                 target_fns=target_fns, days_lag=DAYS_LAG, days_lead=DAYS_LEAD, sample_size='ALL')
-        val_set = RIFT_Dataset(ts_df, ('2017-01-01', '2017-02-01'),
-                               target_fns=target_fns, days_lag=DAYS_LAG, days_lead=DAYS_LEAD, sample_size='ALL')
-        # with open('data/train/train_set.dill', 'wb') as handle:
-        #     dill.dump(train_set, handle)
-        # with open('data/train/val_set.dill', 'wb') as handle:
-        #     dill.dump(val_set, handle)
-
-        with lzma.open('data/train/train_set.dill.xz', 'wb') as handle:
-            dill.dump(train_set, handle)
-        with lzma.open('data/train/val_set.dill.xz', 'wb') as handle:
-            dill.dump(val_set, handle)
-    else:
-        with lzma.open('data/train/train_set.dill.xz', 'rb') as handle:
-            train_set = dill.load(handle)
-        with lzma.open('data/train/val_set.dill.xz', 'rb') as handle:
-            val_set = dill.load(handle)
-        # with open('data/train/train_set.dill', 'rb') as handle:
-        #     train_set = dill.load(handle)
-        # with open('data/train/val_set.dill', 'rb') as handle:
-        #     val_set = dill.load(handle)
-
-    #print(train_set[0])
 
 
     config = RIFT_Model_Config(
         model_type="RIFT",
-        input_size=24,
-        sequence_length=DAYS_LAG,
-        n_targets=len(target_fns),
+        input_size=23,
+        sequence_length=252,
+        n_targets=6+1,
         input_ts_transform_list=[], #input_ts_transform_fns,
-        tcn_num_channels=[450, 450, 450],
+        tcn_num_channels=[600, 600, 600],
         tcn_kernel_size=3,
         tcn_dropout=0.1,
         positional_encoding=True,
@@ -159,10 +141,12 @@ if __name__ == '__main__':
         loss_function=torch.nn.L1Loss(),
         learning_rate=5e-4,
         l2_lambda=0.0,
-        max_epochs=10,  # 10
+        max_epochs=100,
         accumulation_steps=20,  # 20
-        evaluate_every_n_steps=400,  # 400
-        consecutive_losses_to_stop=3
+        evaluate_every_n_steps=10000,  # 400
+
+
+        consecutive_losses_to_stop=5
     )
 
     param_search_grid = {
@@ -170,4 +154,6 @@ if __name__ == '__main__':
         #'post_encoder_fc_layers': [[512, 256]]
     }
     model_trainers, res_dfs = train_RIFT_model(config, train_set, val_set, param_search_grid)
-    breakpoint()
+    with open('mlruns/results/rift_res_dfs.dill', 'wb') as handle:
+        dill.dump(res_dfs, handle)
+    #breakpoint()

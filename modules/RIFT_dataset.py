@@ -20,22 +20,19 @@ class RIFT_Dataset(data.Dataset):
         self.ts_df = ts_df # columns: ["ticker", "date", "price", "log_ret"]
         if norm_inputs:
             yield_cols = []
-            px_cols = []
             other_cols = []
             for c in ts_df.columns:
-                if c in ['ticker', 'date', 'rel_date', 'rel_date_num']:
+                if c in ['ticker', 'date', 'rel_date', 'rel_date_num', 'price']:
                     continue
                 elif c[:5] == 'yield':
                     yield_cols.append(c)
-                elif c in ['price', 'log_ret']:
-                    px_cols.append(c)
                 else:
                     other_cols.append(c)
 
             yield_mean = (ts_df[yield_cols].values).mean()
             yield_std = (ts_df[yield_cols].values).std()
             ts_df[yield_cols] = (ts_df[yield_cols] - yield_mean) / yield_std
-            for c in px_cols:
+            for c in []: # px_cols:
                 #group by ticker
                 px_mean = ts_df.groupby('ticker')[c].transform('mean')
                 px_std = ts_df.groupby('ticker')[c].transform('std')
@@ -62,6 +59,7 @@ class RIFT_Dataset(data.Dataset):
         self.process_ts_df()
         self.create_ts_dict()
         self.create_pairs()
+        self.remove_excess_from_ts(delete=True)
     
     def process_ts_df(self):
         self.ts_df['date'] = pd.to_datetime(self.ts_df['date'])
@@ -74,19 +72,20 @@ class RIFT_Dataset(data.Dataset):
     
     def create_ts_dict(self):
         tickers = sorted(set(self.ts_df['ticker'].tolist()))
-        ignore = ['ticker', 'date', 'rel_date', 'rel_date_num']
+        ignore = ['ticker', 'date', 'rel_date', 'rel_date_num', 'price']
         num_cols = self.ts_df.shape[1] - len(ignore)  # exclude ticker, date, rel_date_num
         self.ts_dict = {ticker: np.full((len(self.trading_date_list), num_cols), np.nan) for ticker in tickers}
         for ticker in tickers:
-            ticker_df = self.ts_df[self.ts_df['ticker'] == ticker].sort_values(by='date')
-            rel_date_nums = ticker_df['rel_date_num'].tolist()
-            i = 0
-            for c in ticker_df.columns:
-                if c in ignore:
-                    continue
-                data = ticker_df[c].tolist()
-                self.ts_dict[ticker][rel_date_nums, i] = data
-                i += 1
+            ticker_df = self.ts_df.query(f"ticker == '{ticker}'")
+            #rel_date_nums = ticker_df['rel_date_num'].tolist()
+            self.ts_dict[ticker] = ticker_df[[c for c in ticker_df.columns if c not in ignore]].values
+            # i = 0
+            # for c in ticker_df.columns:
+            #     if c in ignore:
+            #         continue
+            #     data = ticker_df[c].tolist()
+            #     self.ts_dict[ticker][rel_date_nums, i] = data
+            #     i += 1
     
     def create_pairs(self):
         self.pairs = []
@@ -97,12 +96,24 @@ class RIFT_Dataset(data.Dataset):
             if self.sample_size == "ALL":
                 for t, s in combinations(tickers, 2):
                     self.pairs.append((date, self.rel_date_num_dict[date], t, s))
-            else:
-                ticker_num = self.sample_size // 2
-                if isinstance(self.sample_size, float):
-                    ticker_num = int(len(tickers) * self.sample_size) // 2
-                for t, s in zip(tickers[0:ticker_num], tickers[ticker_num:2*ticker_num]):
+            elif isinstance(self.sample_size, int):
+                i = 0
+                for t, s in combinations(tickers, 2):
+                    if i >= self.sample_size:
+                        break
                     self.pairs.append((date, self.rel_date_num_dict[date], t, s))
+                    i += 1
+                print(f"Sampled {i} pairs")
+            elif isinstance(self.sample_size, float):
+                i = 0
+                max = int(self.sample_size * len(tickers))
+                for t, s in combinations(tickers, 2):
+                    if i >= max:
+                        break
+                    self.pairs.append((date, self.rel_date_num_dict[date], t, s))
+                    i += 1
+                print(f"Sampled {self.sample_size}=>{i} pairs")
+
         print(f"Total number of pairs: {len(self.pairs)}")
 
     def get_available_tickers(self, date):
@@ -114,6 +125,15 @@ class RIFT_Dataset(data.Dataset):
         filtered_ts_df = self.ts_df.loc[(self.ts_df['rel_date_num'] >= start_rel_date_num) & (self.ts_df['rel_date_num'] <= end_rel_date_num)]
         tickers_missing = filtered_ts_df.groupby('ticker')['price'].apply(lambda x: x.isna().any())
         return list(tickers_missing[~tickers_missing].index)
+
+    def remove_excess_from_ts(self, delete=False):
+        if delete:
+            self.ts_df = None
+        else:
+            dts = [date for date in self.trading_date_list if pd.to_datetime(self.start_date) <= date <= pd.to_datetime(self.end_date)]
+            max_rel_date_num = self.rel_date_num_dict[dts[-1]] + self.days_lead
+            min_rel_date_num = self.rel_date_num_dict[dts[0]] - self.days_lag + 1
+            self.ts_df = self.ts_df.loc[(self.ts_df['rel_date_num'] >= min_rel_date_num) & (self.ts_df['rel_date_num'] <= max_rel_date_num)]
 
     def calc_target_functions(self, target_inputs_arr, dims_to_compute, functions_list):
         n_functions = len(functions_list)
@@ -137,23 +157,18 @@ class RIFT_Dataset(data.Dataset):
             return tensor
     
     def __getitem__(self, index):
-        corr_col = 1 #0 for price, 1 for log_ret
+        corr_col = 0 #log return
         date, rel_date_num, t, s = self.pairs[index]
         ts_lag_t = self.ts_dict[t][rel_date_num-self.days_lag+1:rel_date_num+1, :]
         ts_lead_t = self.ts_dict[t][rel_date_num+1:rel_date_num+self.days_lead+1, :]
         ts_lag_s = self.ts_dict[s][rel_date_num-self.days_lag+1:rel_date_num+1, :]
         ts_lead_s = self.ts_dict[s][rel_date_num+1:rel_date_num+self.days_lead+1, :]
-        
-        #if self.sample_size == "ALL": #TODO: What is this supposed to do? Ans: Legacy
-        #    raise NotImplementedError
-        #    return (self.transform(ts_lag_t), self.transform(ts_lag_s)), [date.strftime('%Y-%m-%d'), rel_date_num, t, s]
 
         historical_corr = seq_corr_1d(self.transform(ts_lag_t[:, corr_col]), self.transform(ts_lag_s[:, corr_col])).item()
         target = np.zeros((len(self.target_fns)) + 1)
         for i, target_fn in enumerate(self.target_fns):
             target[i] = target_fn(self.transform(ts_lead_t[:, corr_col]), self.transform(ts_lead_s[:, corr_col])).item()
-        target = target - historical_corr # target as residual correlation by subtracting historical correlation
-        #historical_corr is last element of target
+        target = target - historical_corr
         target[-1] = historical_corr
         
         return (self.transform(ts_lag_t), self.transform(ts_lag_s)), self.transform(target)
@@ -189,11 +204,29 @@ if __name__ == '__main__':
 
         rd = RIFT_Dataset(ts_df, ('2018-01-01', '2018-01-08'), days_lead=10, days_lag=20,
                           target_fns=target_fns, sample_size='ALL')
-        with lzma.open('../data/dataset/dataset_mini.dill.xz', 'wb') as handle:
+        with lzma.open('../data/train/dataset_mini.dill.xz', 'wb') as handle:
             dill.dump(rd, handle)
     else:
-        with lzma.open('../data/dataset/dataset_mini.dill.xz', 'rb') as handle:
+        with lzma.open('../data/train/dataset_mini.dill.xz', 'rb') as handle:
             rd = dill.load(handle)
+
+
+    dataset_length = len(rd)
+    train_indices = list(range(0, int(0.2 * dataset_length)))
+    val_indices = list(range(int(0.8 * dataset_length), dataset_length))
+
+    import math
+    # split the 2010 data into train/val (no shuffle), then sample 0.5% of each
+    train_set, val_set = data.Subset(rd, train_indices), data.Subset(rd, val_indices)
+    train_size = math.floor(0.1 * len(train_set))
+    val_size = math.floor(0.1 * len(val_set))
+    train_set, _ = data.random_split(train_set, [train_size, len(train_set) - train_size])
+    val_set, _ = data.random_split(val_set, [val_size, len(val_set) - val_size])
+    print(f"dataset size: {dataset_length}")
+    print(f"train_set size: {len(train_set)}")
+    print(f"val_set size: {len(val_set)}")
+
+    score_loader = data.DataLoader(train_set, batch_size=32 * 1, drop_last=False,shuffle=False)
 
     print(rd[0])
 

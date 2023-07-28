@@ -103,6 +103,7 @@ class Model_Trainer():
                 self.recent_loss += loss.item()
 
                 if self.steps % self.config.accumulation_steps == 0:
+                    print(f"Step {self.steps}")
                     if self.config.accumulation_steps > 1:
                         with open(self.log_file_name, 'a') as f:
                             f.write(f"step #{self.steps}, loss = {loss}\n")
@@ -217,13 +218,23 @@ class Model_Trainer():
                 # and append security IDs and datetimes for reference, then save the whole DF down
         res_col_names = ['target_' + str(n) + '_pred' for n in range(0, self.config.n_targets)] + \
             ['target_' + str(n) + '_actual' for n in range(0, self.config.n_targets)]
-        res_df = pd.concat(
-            [
-                pd.DataFrame([pair for pair in score_data_loader.dataset.pairs], columns=["date", "rel_date_num", "ticker_1", "ticker_2"]),
-                pd.DataFrame(res, columns=res_col_names)
-            ], 
-            axis=1
-        )
+        if isinstance(score_data_loader.dataset, data.Subset):
+            pairs = [score_data_loader.dataset.dataset.dataset.pairs[i] for i in score_data_loader.dataset.indices]
+            res_df = pd.concat(
+                [
+                    pd.DataFrame(pairs, columns=["date", "rel_date_num", "ticker_1", "ticker_2"]),
+                    pd.DataFrame(res, columns=res_col_names)
+                ],
+                axis=1
+            )
+        else:
+            res_df = pd.concat(
+                [
+                    pd.DataFrame([pair for pair in score_data_loader.dataset.pairs], columns=["date", "rel_date_num", "ticker_1", "ticker_2"]),
+                    pd.DataFrame(res, columns=res_col_names)
+                ],
+                axis=1
+            )
         res_df.to_csv(f'mlruns/{self.experiment_id}/scored_results.csv')
         
         mse_avg = 0.0
